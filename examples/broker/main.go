@@ -45,6 +45,8 @@ func sub() {
 func main() {
 	cmd.Init()
 
+	// broker包中有内部的默认实例:http broker服务
+
 	if err := broker.Init(); err != nil {
 		log.Fatalf("Broker Init error: %v", err)
 	}

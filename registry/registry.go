@@ -6,6 +6,9 @@ import (
 )
 
 var (
+	// 结构体 go-micro/registry/mdns_registry.go => mdnsRegistry
+	//
+	// 默认注册实例
 	DefaultRegistry = NewRegistry()
 
 	// Not found error when GetService is called

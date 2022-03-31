@@ -27,24 +27,30 @@ import (
 	"golang.org/x/net/http2"
 )
 
-// HTTP Broker is a point to point async broker
+// HTTP Broker is a point to point async broker // HTTP Broker 是点对点异步代理
 type httpBroker struct {
 	id      string
 	address string
 	opts    Options
 
+	// http.Serve 时需要
 	mux *http.ServeMux
 
 	c *http.Client
 	r registry.Registry
 
 	sync.RWMutex
+	// 订阅者名单
 	subscribers map[string][]*httpSubscriber
 	running     bool
-	exit        chan chan error
+
+	// 接收退出信号
+	exit chan chan error
 
 	// offline message inbox
-	mtx   sync.RWMutex
+	mtx sync.RWMutex
+
+	// 缓存等待发布的消息
 	inbox map[string][][]byte
 }
 
@@ -57,6 +63,7 @@ type httpSubscriber struct {
 	hb    *httpBroker
 }
 
+// httpEvent broker的异步事件，给订阅者发生这个实体，并阻塞记录对方返回的err
 type httpEvent struct {
 	m   *Message
 	t   string
@@ -180,6 +187,7 @@ func (h *httpSubscriber) Unsubscribe() error {
 	return h.hb.unsubscribe(h)
 }
 
+// saveMessage 缓存等待发布的消息
 func (h *httpBroker) saveMessage(topic string, msg []byte) {
 	h.mtx.Lock()
 	defer h.mtx.Unlock()
@@ -199,6 +207,7 @@ func (h *httpBroker) saveMessage(topic string, msg []byte) {
 	h.inbox[topic] = c
 }
 
+// getMessage 获取等待发布的消息
 func (h *httpBroker) getMessage(topic string, num int) [][]byte {
 	h.mtx.Lock()
 	defer h.mtx.Unlock()
@@ -265,7 +274,7 @@ func (h *httpBroker) run(l net.Listener) {
 
 	for {
 		select {
-		// heartbeat for each subscriber
+		// heartbeat for each subscriber 对每个订阅者进行心跳
 		case <-t.C:
 			h.RLock()
 			for _, subs := range h.subscribers {
@@ -274,8 +283,9 @@ func (h *httpBroker) run(l net.Listener) {
 				}
 			}
 			h.RUnlock()
-		// received exit signal
+		// received exit signal 监听收到退出信号
 		case ch := <-h.exit:
+			// ch 将停止是否顺利成功，将错误发送回触发方
 			ch <- l.Close()
 			h.RLock()
 			for _, subs := range h.subscribers {
@@ -326,13 +336,14 @@ func (h *httpBroker) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	}
 
 	p := &httpEvent{m: m, t: topic}
-	id := req.Form.Get("id")
+	id := req.Form.Get("id") // id 消息交互的唯一ID, 比如:cli发生 id=2 的消息, srv订阅 id=2 的消息
 
 	//nolint:prealloc
 	var subs []Handler
 
 	h.RLock()
 	for _, subscriber := range h.subscribers[topic] {
+		// 遍历所有的订阅
 		if id != subscriber.id {
 			continue
 		}
@@ -342,6 +353,7 @@ func (h *httpBroker) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 
 	// execute the handler
 	for _, fn := range subs {
+		// fn 执行事件
 		p.err = fn(p)
 	}
 }
@@ -352,6 +364,7 @@ func (h *httpBroker) Address() string {
 	return h.address
 }
 
+// Connect 开启连接
 func (h *httpBroker) Connect() error {
 	h.RLock()
 	if h.running {
@@ -371,9 +384,10 @@ func (h *httpBroker) Connect() error {
 
 		fn := func(addr string) (net.Listener, error) {
 			if config == nil {
+				// TLS配置为空时，采用默认TLS配置
 				hosts := []string{addr}
 
-				// check if its a valid host:port
+				// check if its a valid host:port 核查地址是否有效
 				if host, _, err := net.SplitHostPort(addr); err == nil {
 					if len(host) == 0 {
 						hosts = maddr.IPs()
@@ -382,19 +396,21 @@ func (h *httpBroker) Connect() error {
 					}
 				}
 
-				// generate a certificate
+				// generate a certificate 生成tls证书
 				cert, err := mls.Certificate(hosts...)
 				if err != nil {
 					return nil, err
 				}
 				config = &tls.Config{Certificates: []tls.Certificate{cert}}
 			}
+			// 创建 tls 监听对象:tcp ,下边的 http.Serve 会加上 http 协议
 			return tls.Listen("tcp", addr, config)
 		}
 
 		l, err = mnet.Listen(h.address, fn)
 	} else {
 		fn := func(addr string) (net.Listener, error) {
+			// 创建 no tls 监听对象:tcp ,下边的 http.Serve 会加上 http 协议
 			return net.Listen("tcp", addr)
 		}
 
@@ -408,8 +424,10 @@ func (h *httpBroker) Connect() error {
 	addr := h.address
 	h.address = l.Addr().String()
 
+	// Serve 接收 Http协议的连接
 	go http.Serve(l, h.mux)
 	go func() {
+		// 启动
 		h.run(l)
 		h.Lock()
 		h.opts.Addrs = []string{addr}
@@ -430,6 +448,7 @@ func (h *httpBroker) Connect() error {
 	return nil
 }
 
+// Disconnect 断开连接
 func (h *httpBroker) Disconnect() error {
 	h.RLock()
 	if !h.running {
@@ -457,6 +476,7 @@ func (h *httpBroker) Disconnect() error {
 	return err
 }
 
+// Init 初始化操作
 func (h *httpBroker) Init(opts ...Option) error {
 	h.RLock()
 	if h.running {
@@ -508,8 +528,9 @@ func (h *httpBroker) Options() Options {
 	return h.opts
 }
 
+// Publish 发布消息
 func (h *httpBroker) Publish(topic string, msg *Message, opts ...PublishOption) error {
-	// create the message first
+	// create the message first // 新建一个消息实例
 	m := &Message{
 		Header: make(map[string]string),
 		Body:   msg.Body,
@@ -521,7 +542,7 @@ func (h *httpBroker) Publish(topic string, msg *Message, opts ...PublishOption) 
 
 	m.Header["Micro-Topic"] = topic
 
-	// encode the message
+	// encode the message 编码序列化
 	b, err := h.opts.Codec.Marshal(m)
 	if err != nil {
 		return err
@@ -530,7 +551,7 @@ func (h *httpBroker) Publish(topic string, msg *Message, opts ...PublishOption) 
 	// save the message
 	h.saveMessage(topic, b)
 
-	// now attempt to get the service
+	// now attempt to get the service // 现在尝试获取服务, s 这个服务就是需要发布的目标:broker服务
 	h.RLock()
 	s, err := h.r.GetService(serviceName)
 	if err != nil {
@@ -539,14 +560,20 @@ func (h *httpBroker) Publish(topic string, msg *Message, opts ...PublishOption) 
 	}
 	h.RUnlock()
 
+	/*
+		node 节点是在 broker注册的服务 s 上的那些订阅者
+	*/
+
+	// pub 给这个 node 节点发布消息的方法
 	pub := func(node *registry.Node, t string, b []byte) error {
 		scheme := "http"
 
-		// check if secure is added in metadata
+		// check if secure is added in metadata 核查是否设置了TLS需求
 		if node.Metadata["secure"] == "true" {
 			scheme = "https"
 		}
 
+		// vals.Encode() => xxx=yy&bb=cc
 		vals := url.Values{}
 		vals.Add("id", node.Id)
 
@@ -556,23 +583,27 @@ func (h *httpBroker) Publish(topic string, msg *Message, opts ...PublishOption) 
 			return err
 		}
 
-		// discard response body
+		// discard response body 丢弃响应体,并关闭
+		//
+		// io.Discard 是一个 Writer，所有 Write 调用都在其上成功，无需执行任何操作。
+		// io.Discard discard 实现 ReaderFrom 作为优化，所以 Copy to io.Discard 可以避免做不必要的工作。
 		io.Copy(io.Discard, r.Body)
 		r.Body.Close()
 		return nil
 	}
 
+	// srv 给这个 s 服务发布消息的方法
 	srv := func(s []*registry.Service, b []byte) {
 		for _, service := range s {
 			var nodes []*registry.Node
 
 			for _, node := range service.Nodes {
-				// only use nodes tagged with broker http
+				// only use nodes tagged with broker http // 只使用带有代理 http 标记的节点
 				if node.Metadata["broker"] != "http" {
 					continue
 				}
 
-				// look for nodes for the topic
+				// look for nodes for the topic // 符合topic的节点
 				if node.Metadata["topic"] != topic {
 					continue
 				}
@@ -580,53 +611,57 @@ func (h *httpBroker) Publish(topic string, msg *Message, opts ...PublishOption) 
 				nodes = append(nodes, node)
 			}
 
-			// only process if we have nodes
+			// only process if we have nodes // 只有当我们有节点时才处理
 			if len(nodes) == 0 {
 				continue
 			}
 
 			switch service.Version {
-			// broadcast version means broadcast to all nodes
+			// broadcast version means broadcast to all nodes // 广播版本表示广播到所有节点
 			case broadcastVersion:
 				var success bool
 
-				// publish to all nodes
+				// publish to all nodes // 发布给所有节点
 				for _, node := range nodes {
-					// publish async
+					// publish async // 异步发布
 					if err := pub(node, topic, b); err == nil {
 						success = true
 					}
 				}
 
-				// save if it failed to publish at least once
+				// save if it failed to publish at least once // 如果一个都没发布成功，则继续缓存消息, 等待下次发送 ps:广播，这里认为有一个成功就是成功
 				if !success {
 					h.saveMessage(topic, b)
 				}
 			default:
-				// select node to publish to
+				// select node to publish to // 随机一个节点进行发布
 				node := nodes[rand.Int()%len(nodes)]
 
 				// publish async to one node
 				if err := pub(node, topic, b); err != nil {
-					// if failed save it
+					// if failed save it // 失败的话，继续缓存消息, 等待下次发送
 					h.saveMessage(topic, b)
 				}
 			}
 		}
 	}
 
-	// do the rest async
+	// do the rest async // 做接下来的异步操作
 	go func() {
 		// get a third of the backlog
 		messages := h.getMessage(topic, 8)
 		delay := (len(messages) > 1)
+		//
+		// delay = true 表示有消息积压
+		// ps: 正常是缓存区有一个消息写入马上就会读出，若有缓存消息多于1个，说明有积压
+		// 积压原因很多，比如：发送消息很多失败的，所以失败的消息积压在当前map中，失败原因：对方服务挂了无响应，处理缓慢超时等
 
-		// publish all the messages
+		// publish all the messages // 发布消息
 		for _, msg := range messages {
-			// serialize here
+			// serialize here // 序列化消息并进行发送
 			srv(s, msg)
 
-			// sending a backlog of messages
+			// sending a backlog of messages // 发送积压的消息,间隔100ms
 			if delay {
 				time.Sleep(time.Millisecond * 100)
 			}
@@ -636,6 +671,7 @@ func (h *httpBroker) Publish(topic string, msg *Message, opts ...PublishOption) 
 	return nil
 }
 
+// Subscribe 订阅消息
 func (h *httpBroker) Subscribe(topic string, handler Handler, opts ...SubscribeOption) (Subscriber, error) {
 	var err error
 	var host, port string
@@ -658,7 +694,7 @@ func (h *httpBroker) Subscribe(topic string, handler Handler, opts ...SubscribeO
 		secure = true
 	}
 
-	// register service
+	// register service 注册服务节点 node
 	node := &registry.Node{
 		Id:      topic + "-" + h.id,
 		Address: mnet.HostPort(addr, port),
@@ -669,19 +705,20 @@ func (h *httpBroker) Subscribe(topic string, handler Handler, opts ...SubscribeO
 		},
 	}
 
-	// check for queue group or broadcast queue
+	// check for queue group or broadcast queue // 检查队列组或广播队列
 	version := options.Queue
 	if len(version) == 0 {
-		version = broadcastVersion
+		version = broadcastVersion // 默认广播队列
 	}
 
+	// register service 注册服务
 	service := &registry.Service{
 		Name:    serviceName,
 		Version: version,
-		Nodes:   []*registry.Node{node},
+		Nodes:   []*registry.Node{node}, // 注册节点
 	}
 
-	// generate subscriber
+	// generate subscriber 生成订阅者
 	subscriber := &httpSubscriber{
 		opts:  options,
 		hb:    h,

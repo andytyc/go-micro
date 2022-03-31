@@ -18,6 +18,7 @@ type Broker interface {
 // message and optional Ack method to acknowledge receipt of the message.
 type Handler func(Event) error
 
+// Message broker 传递的消息实体
 type Message struct {
 	Header map[string]string
 	Body   []byte
@@ -39,6 +40,12 @@ type Subscriber interface {
 }
 
 var (
+	// 结构体 go-micro/broker/http.go => httpBroker
+	//
+	// 一个内部默认的实例:点对点的异步代理
+	// broker 服务实例的理解：
+	// 1. 类似一个港口:既接收货物，也发送货物，但它们都在同一个港口中;
+	// 2. 作为一个代理，上下游都是客运商(也就是服务)，大家要发送什么消息，接收什么消息，都在我这里注册
 	DefaultBroker Broker = NewBroker()
 )
 

@@ -37,6 +37,7 @@ type mdnsEntry struct {
 	node *mdns.Server
 }
 
+// mdnsRegistry 注册
 type mdnsRegistry struct {
 	opts Options
 	// the mdns domain

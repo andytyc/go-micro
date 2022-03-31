@@ -133,6 +133,8 @@ func Extract(addr string) (string, error) {
 }
 
 // IPs returns all known ips
+//
+// 获取当前系统网络所有单播(unicast)接口地址
 func IPs() []string {
 	ifaces, err := net.Interfaces()
 	if err != nil {

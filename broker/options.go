@@ -9,17 +9,28 @@ import (
 )
 
 type Options struct {
-	Addrs  []string
+	Addrs []string
+
+	// Secure 是否采用TLS安全策略, 也就是是否是 https 而不是 http
+	//
+	// ps: TLSConfig 配置为空时，采用默认TLS配置
 	Secure bool
-	Codec  codec.Marshaler
+
+	// TLSConfig 如果不为空，等同 Secure = true 并且会用到此TLS配置
+	//
+	// ps: 即使 Secure = true, 因为 TLSConfig 不为空，也会采用TLS安全策略
+	TLSConfig *tls.Config
+
+	// Codec 编码器接口, 比如:json, proto
+	Codec codec.Marshaler
 
 	// Handler executed when error happens in broker mesage
 	// processing
 	ErrorHandler Handler
 
-	TLSConfig *tls.Config
 	// Registry used for clustering
 	Registry registry.Registry
+
 	// Other options for implementations of the interface
 	// can be stored in a context
 	Context context.Context
