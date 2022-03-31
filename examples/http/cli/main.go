@@ -26,5 +26,4 @@ func CallHttpServer() {
 	// call service
 	err := c.Call(context.Background(), request, response)
 	log.Printf("err:%v response:%#v\n", err, response)
-
 }

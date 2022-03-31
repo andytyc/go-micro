@@ -6,9 +6,9 @@ import (
 	httpServer "github.com/asim/go-micro/plugins/server/http/v4"
 	"go-micro.dev/v4"
 
+	"github.com/gin-gonic/gin"
 	"go-micro.dev/v4/registry"
 	"go-micro.dev/v4/server"
-	"github.com/gin-gonic/gin"
 )
 
 const (
@@ -16,13 +16,14 @@ const (
 )
 
 func main() {
-
 	srv := httpServer.NewServer(
 		server.Name(SERVER_NAME),
 		server.Address(":8080"),
 	)
 
-	gin.SetMode(gin.ReleaseMode)
+	// web 其实使用的是gin框架
+	// gin.SetMode(gin.ReleaseMode)
+	gin.SetMode(gin.DebugMode)
 	router := gin.New()
 	router.Use(gin.Recovery())
 
@@ -51,7 +52,14 @@ func newDemo() *demo {
 }
 
 func (a *demo) InitRouter(router *gin.Engine) {
+	// get http://127.0.0.1:8080/
+	router.GET("/", a.hello)
+	// post http://127.0.0.1:8080/demo
 	router.POST("/demo", a.demo)
+}
+
+func (a *demo) hello(c *gin.Context) {
+	c.JSON(200, "hello world")
 }
 
 func (a *demo) demo(c *gin.Context) {
